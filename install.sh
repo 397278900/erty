@@ -6,7 +6,7 @@ RED="\033[31m"      # Error message
 GREEN="\033[32m"    # Success message
 YELLOW="\033[33m"   # Warning message
 BLUE="\033[36m"     # Info message
-PLAIN='\033[0m'
+PLAIN="\033[0m" 
 
 OS=`hostnamectl | grep -i system | cut -d: -f2`
 
