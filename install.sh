@@ -2,14 +2,11 @@
 # v2ray Ubuntu系统一键安装脚本
 # Author: hijk<https://hijk.art>
 
-RED="\033[31m"   # Error message
-
+RED="\033[31m"      # Error message
 GREEN="\033[32m"    # Success message
-
 YELLOW="\033[33m"   # Warning message
-
 BLUE="\033[36m"     # Info message
-PLAIN="\033[0m" 
+PLAIN='\033[0m'
 
 OS=`hostnamectl | grep -i system | cut -d: -f2`
 
@@ -109,7 +106,7 @@ preinstall() {
 
 installV2ray() {
     colorEcho $BLUE " 安装v2ray..."
-    bash <(curl -sL https://github.com/397278900/erty/blob/main/go2.sh)
+    bash <(curl -sL ${V6_PROXY}https://raw.githubusercontent.com/hijkpw/scripts/master/goV2.sh)
 
     if [ ! -f $CONFIG_FILE ]; then
         colorEcho $RED " $OS 安装V2ray失败，请到 https://hijk.art 网站反馈"
