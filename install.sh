@@ -1,5 +1,5 @@
 #!/bin/bash
-# v2ray Ubuntu系统一键安装脚本
+# v2ray centos系统一键安装教程
 # Author: hijk<https://hijk.art>
 
 RED="\033[31m"      # Error message
@@ -30,32 +30,31 @@ checkSystem() {
         exit 1
     fi
 
-    res=`lsb_release -d | grep -i ubuntu`
-    if [ "$?" != "0" ]; then
-        res=`which apt`
+    if [ ! -f /etc/centos-release ];then
+        res=`which yum`
         if [ "$?" != "0" ]; then
-           colorEcho $RED " 系统不是Ubuntu"
+            colorEcho $RED " 系统不是CentOS"
             exit 1
-        fi
-        res=`which systemctl`
+         fi
+         res=`which systemctl`
          if [ "$?" != "0" ]; then
             colorEcho $RED " 系统版本过低，请重装系统到高版本后再使用本脚本！"
             exit 1
          fi
     else
-        result=`lsb_release -d | grep -oE "[0-9.]+"`
+        result=`cat /etc/centos-release|grep -oE "[0-9.]+"`
         main=${result%%.*}
-        if [ $main -lt 16 ]; then
-            colorEcho $RED " 不受支持的Ubuntu版本"
+        if [ $main -lt 7 ]; then
+            colorEcho $RED " 不受支持的CentOS版本"
             exit 1
-        fi
-     fi
+         fi
+    fi
 }
 
 slogon() {
     clear
     echo "#############################################################"
-    echo -e "#            ${RED}Ubuntu LTS v2ray一键安装脚本${PLAIN}                #"
+    echo -e "#               ${RED}CentOS 7/8 V2ray一键安装脚本${PLAIN}                 #"
     echo -e "# ${GREEN}作者${PLAIN}: 网络跳越(hijk)                                      #"
     echo -e "# ${GREEN}网址${PLAIN}: https://hijk.art                                    #"
     echo -e "# ${GREEN}论坛${PLAIN}: https://hijk.club                                   #"
@@ -92,16 +91,22 @@ getData() {
 
 preinstall() {
     colorEcho $BLUE " 更新系统..."
-    apt clean all
-    apt update
-    apt -y upgrade
+    yum clean all
+    #yum update -y
+
     colorEcho $BLUE " 安装必要软件"
-    apt install -y telnet wget vim net-tools ntpdate unzip
+    yum install -y epel-release telnet wget vim net-tools chrony unzip
     res=`which wget`
-    [ "$?" != "0" ] && apt install -y wget
+    [ "$?" != "0" ] && yum install -y wget
     res=`which netstat`
-    [ "$?" != "0" ] && apt install -y net-tools
-    apt autoremove -y
+    [ "$?" != "0" ] && yum install -y net-tools
+    yum install -y nginx
+    systemctl enable nginx && systemctl start nginx
+
+    if [ -s /etc/selinux/config ] && grep 'SELINUX=enforcing' /etc/selinux/config; then
+        sed -i 's/SELINUX=enforcing/SELINUX=permissive/g' /etc/selinux/config
+        setenforce 0
+    fi
 }
 
 installV2ray() {
@@ -118,31 +123,40 @@ installV2ray() {
     sed -i -e "s/alterId\":.*[0-9]*/alterId\": ${alterid}/" $CONFIG_FILE
     uid=`grep id $CONFIG_FILE| cut -d: -f2 | tr -d \",' '`
     ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
-    ntpdate -u time.nist.gov
-    
+    systemctl enable chronyd 
+    systemctl start chronyd 
     systemctl enable v2ray
     systemctl restart v2ray
     sleep 3
-    res=`netstat -ntlp| grep ${PORT} | grep v2ray`
+    res=`ss -ntlp| grep ${PORT} | grep v2ray`
     if [ "${res}" = "" ]; then
-        colorEcho $red " $OS 端口号：${PORT}，v2启动失败，请检查端口是否被占用！"
+        colorEcho $RED " 端口号：${PORT}， v2启动失败，请检查端口是否被占用！"
         exit 1
     fi
     colorEcho $GREEN " v2ray安装成功！"
 }
 
 setFirewall() {
-    res=`ufw status | grep -i inactive`
-    if [ "$res" = "" ];then
-        ufw allow ${PORT}/tcp
-        ufw allow ${PORT}/udp
+    systemctl status firewalld > /dev/null 2>&1
+    if [[ $? -eq 0 ]];then
+        firewall-cmd --permanent --add-service=http
+        firewall-cmd --permanent --add-port=${PORT}/tcp
+        firewall-cmd --permanent --add-port=${PORT}/udp
+        firewall-cmd --reload
+    else
+        nl=`iptables -nL | nl | grep FORWARD | awk '{print $1}'`
+        if [[ "$nl" != "3" ]]; then
+            iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+            iptables -I INPUT -p tcp --dport ${PORT} -j ACCEPT
+            iptables -I INPUT -p udp --dport ${PORT} -j ACCEPT
+        fi
     fi
 }
 
 installBBR() {
     result=$(lsmod | grep bbr)
     if [ "$result" != "" ]; then
-        colorEcho $BLUE " BBR模块已安装"
+        colorEcho $YELLOW " BBR模块已安装"
         INSTALL_BBR=false
         return;
     fi
@@ -165,10 +179,14 @@ installBBR() {
     fi
 
     colorEcho $BLUE " 安装BBR模块..."
-    apt install -y --install-recommends linux-generic-hwe-16.04
-    grub-set-default 0
-    echo "tcp_bbr" >> /etc/modules-load.d/modules.conf
-    INSTALL_BBR=false
+    if [[ "$V6_PROXY" = "" ]]; then
+        rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
+        rpm -Uvh http://www.elrepo.org/elrepo-release-7.0-4.el7.elrepo.noarch.rpm
+        yum --enablerepo=elrepo-kernel install kernel-ml -y
+        grub2-set-default 0
+        echo "tcp_bbr" >> /etc/modules-load.d/modules.conf
+        INSTALL_BBR=true
+    fi
 }
 
 info() {
@@ -185,7 +203,7 @@ info() {
     res=`grep network $CONFIG_FILE`
     [ -z "$res" ] && network="tcp" || network=`grep network $CONFIG_FILE| cut -d: -f2 | tr -d \",' '`
     security="auto"
-        
+    
     raw="{
   \"v\":\"2\",
   \"ps\":\"\",
@@ -203,22 +221,22 @@ info() {
     link="vmess://${link}"
 
     echo ============================================
-    echo -e " ${BLUE}v2ray运行状态：${PLAIN}${status}"
-    echo -e " ${BLUE}v2ray配置文件：${PLAIN}${RED}$CONFIG_FILE${PLAIN}"
+    echo -e " ${BLUE}v2ray运行状态：${PLAIN} ${status}"
+    echo -e " ${BLUE}v2ray配置文件：${PLAIN} ${RED}$CONFIG_FILE${PLAIN}"
     echo ""
     echo -e " ${RED}v2ray配置信息：${PLAIN}               "
-    echo -e "   ${BLUE}IP(address):${PLAIN}  ${RED}${IP}${PLAIN}"
-    echo -e "   ${BLUE}端口(port)：${PLAIN}${RED}${port}${PLAIN}"
-    echo -e "   ${BLUE}id(uuid)：${PLAIN}${RED}${uid}${PLAIN}"
-    echo -e "   ${BLUE}额外id(alterid)：${PLAIN} ${RED}${alterid}${PLAIN}"
-    echo -e "   ${BLUE}加密方式(security)：${PLAIN} ${RED}$security${PLAIN}"
-    echo -e "   ${BLUE}传输协议(network)：${PLAIN} ${RED}${network}${PLAIN}"
+    echo -e "   ${BLUE}IP(address):${PLAIN}   ${RED}${IP}${PLAIN}"
+    echo -e "   ${BLUE}端口(port)：${PLAIN} ${RED}${port}${PLAIN}"
+    echo -e "   ${BLUE}id(uuid)：${PLAIN} ${RED}${uid}${PLAIN}"
+    echo -e "   ${BLUE}额外id(alterid)：${PLAIN}  ${RED}${alterid}${PLAIN}"
+    echo -e "   ${BLUE}加密方式(security)：${PLAIN}  ${RED}$security${PLAIN}"
+    echo -e "   ${BLUE}传输协议(network)：${PLAIN}  ${RED}${network}${PLAIN}"
     echo
-    echo -e " ${BLUE}vmess链接:${PLAIN} $link"
+    echo -e " ${BLUE}vmess链接:${PLAIN}  $link"
 }
 
 bbrReboot() {
-    if [ "${INSTALL_BBR}" == "true" ]; then
+    if [ "$INSTALL_BBR" == "true" ]; then
         echo  
         colorEcho $BLUE " 为使BBR模块生效，系统将在30秒后重启"
         echo  
@@ -228,10 +246,9 @@ bbrReboot() {
     fi
 }
 
-
 install() {
-    echo -n " 系统版本:  "
-    lsb_release -a
+    echo -n "系统版本:  "
+    cat /etc/centos-release
 
     checkSystem
     getData
@@ -239,15 +256,16 @@ install() {
     installBBR
     installV2ray
     setFirewall
-    
+
     info
+    
     bbrReboot
 }
 
 uninstall() {
+    echo ""
     read -p " 确定卸载v2ray吗？(y/n)" answer
     [ -z ${answer} ] && answer="n"
-
     if [ "${answer}" == "y" ] || [ "${answer}" == "Y" ]; then
         systemctl stop v2ray
         systemctl disable v2ray
@@ -256,7 +274,6 @@ uninstall() {
         rm -rf /var/log/v2ray/*
         rm -rf /etc/systemd/system/v2ray.service
         rm -rf /etc/systemd/system/multi-user.target.wants/v2ray.service
-        
         echo -e " ${RED}卸载成功${PLAIN}"
     fi
 }
