@@ -1,525 +1,276 @@
 #!/bin/bash
+# v2ray Ubuntu系统一键安装脚本
+# Author: hijk<https://hijk.art>
 
-# This file is accessible as https://install.direct/go.sh
-# Original source is located at github.com/v2ray/v2ray-core/release/install-release.sh
+RED="\033[31m"      # Error message
+GREEN="\033[32m"    # Success message
+YELLOW="\033[33m"   # Warning message
+BLUE="\033[36m"     # Info message
+PLAIN='\033[0m'
 
-# If not specify, default meaning of return value:
-# 0: Success
-# 1: System error
-# 2: Application error
-# 3: Network error
-
-# CLI arguments
-PROXY=''
-HELP=''
-FORCE=''
-CHECK=''
-REMOVE=''
-VERSION=''
-VSRC_ROOT='/tmp/v2ray'
-EXTRACT_ONLY=''
-LOCAL=''
-LOCAL_INSTALL=''
-DIST_SRC='github'
-ERROR_IF_UPTODATE=''
-
-CUR_VER=""
-NEW_VER=""
-VDIS=''
-ZIPFILE="/tmp/v2ray/v2ray.zip"
-V2RAY_RUNNING=0
-
-CMD_INSTALL=""
-CMD_UPDATE=""
-SOFTWARE_UPDATED=0
-
-SYSTEMCTL_CMD=$(command -v systemctl 2>/dev/null)
-SERVICE_CMD=$(command -v service 2>/dev/null)
-
-#######color code########
-RED="31m"      # Error message
-GREEN="32m"    # Success message
-YELLOW="33m"   # Warning message
-BLUE="36m"     # Info message
+OS=`hostnamectl | grep -i system | cut -d: -f2`
 
 V6_PROXY=""
-res=`curl -sL -4 ip.sb`
+IP=`curl -sL -4 ip.sb`
 if [[ "$?" != "0" ]]; then
+    IP=`curl -sL -6 ip.sb`
     V6_PROXY="https://gh.hijk.art/"
 fi
 
-#########################
-while [[ $# > 0 ]]; do
-    case "$1" in
-        -p|--proxy)
-        PROXY="-x ${2}"
-        shift # past argument
-        ;;
-        -h|--help)
-        HELP="1"
-        ;;
-        -f|--force)
-        FORCE="1"
-        ;;
-        -c|--check)
-        CHECK="1"
-        ;;
-        --remove)
-        REMOVE="1"
-        ;;
-        --version)
-        VERSION="$2"
-        shift
-        ;;
-        --extract)
-        VSRC_ROOT="$2"
-        shift
-        ;;
-        --extractonly)
-        EXTRACT_ONLY="1"
-        ;;
-        -l|--local)
-        LOCAL="$2"
-        LOCAL_INSTALL="1"
-        shift
-        ;;
-        --source)
-        DIST_SRC="$2"
-        shift
-        ;;
-        --errifuptodate)
-        ERROR_IF_UPTODATE="1"
-        ;;
-        *)
-                # unknown option
-        ;;
-    esac
-    shift # past argument or value
-done
+CONFIG_FILE="/etc/v2ray/config.json"
 
-###############################
-colorEcho(){
-    echo -e "\033[${1}${@:2}\033[0m" 1>& 2
+colorEcho() {
+    echo -e "${1}${@:2}${PLAIN}"
 }
 
-archAffix(){
-    case "${1:-"$(uname -m)"}" in
-        i686|i386)
-            echo '32'
-        ;;
-        x86_64|amd64)
-            echo '64'
-        ;;
-        *armv7*)
-            echo 'arm32-v7a'
-            ;;
-        armv6*)
-            echo 'arm32-v6a'
-        ;;
-        *armv8*|aarch64)
-            echo 'arm64-v8a'
-        ;;
-        *mips64le*)
-            echo 'mips64le'
-        ;;
-        *mips64*)
-            echo 'mips64'
-        ;;
-        *mipsle*)
-            echo 'mipsle'
-        ;;
-        *mips*)
-            echo 'mips'
-        ;;
-        *s390x*)
-            echo 's390x'
-        ;;
-        ppc64le)
-            echo 'ppc64le'
-        ;;
-        ppc64)
-            echo 'ppc64'
-        ;;
-        *)
-            return 1
-        ;;
-    esac
+checkSystem() {
+    result=$(id | awk '{print $1}')
+    if [ $result != "uid=0(root)" ]; then
+        colorEcho $RED " 请以root身份执行该脚本"
+        exit 1
+    fi
 
-	return 0
-}
-
-zipRoot() {
-    unzip -lqq "$1" | awk -e '
-        NR == 1 {
-            prefix = $4;
-        }
-        NR != 1 {
-            prefix_len = length(prefix);
-            cur_len = length($4);
-
-            for (len = prefix_len < cur_len ? prefix_len : cur_len; len >= 1; len -= 1) {
-                sub_prefix = substr(prefix, 1, len);
-                sub_cur = substr($4, 1, len);
-
-                if (sub_prefix == sub_cur) {
-                    prefix = sub_prefix;
-                    break;
-                }
-            }
-
-            if (len == 0) {
-                prefix = "";
-                nextfile;
-            }
-        }
-        END {
-            print prefix;
-        }
-    '
-}
-
-downloadV2Ray(){
-    rm -rf /tmp/v2ray
-    mkdir -p /tmp/v2ray
-    if [[ "${DIST_SRC}" == "jsdelivr" ]]; then
-        DOWNLOAD_LINK="https://cdn.jsdelivr.net/gh/v2fly/dist/v2ray-linux-${VDIS}.zip"
+    res=`lsb_release -d | grep -i ubuntu`
+    if [ "$?" != "0" ]; then
+        res=`which apt`
+        if [ "$?" != "0" ]; then
+           colorEcho $RED " 系统不是Ubuntu"
+            exit 1
+        fi
+        res=`which systemctl`
+         if [ "$?" != "0" ]; then
+            colorEcho $RED " 系统版本过低，请重装系统到高版本后再使用本脚本！"
+            exit 1
+         fi
     else
-        DOWNLOAD_LINK="${V6_PROXY}https://github.com/v2fly/v2ray-core/releases/download/${NEW_VER}/v2ray-linux-${VDIS}.zip"
-    fi
-    colorEcho ${BLUE} "Downloading V2Ray: ${DOWNLOAD_LINK}"
-    curl ${PROXY} -L -H "Cache-Control: no-cache" -o ${ZIPFILE} ${DOWNLOAD_LINK}
-    if [ $? != 0 ];then
-        colorEcho ${RED} "Failed to download! Please check your network or try again."
-        return 3
-    fi
-    return 0
-}
-
-installSoftware(){
-    COMPONENT=$1
-    if [[ -n `command -v $COMPONENT` ]]; then
-        return 0
-    fi
-
-    getPMT
-    if [[ $? -eq 1 ]]; then
-        colorEcho ${RED} "The system package manager tool isn't APT or YUM, please install ${COMPONENT} manually."
-        return 1
-    fi
-    if [[ $SOFTWARE_UPDATED -eq 0 ]]; then
-        colorEcho ${BLUE} "Updating software repo"
-        $CMD_UPDATE
-        SOFTWARE_UPDATED=1
-    fi
-
-    colorEcho ${BLUE} "Installing ${COMPONENT}"
-    $CMD_INSTALL $COMPONENT
-    if [[ $? -ne 0 ]]; then
-        colorEcho ${RED} "Failed to install ${COMPONENT}. Please install it manually."
-        return 1
-    fi
-    return 0
-}
-
-# return 1: not apt, yum, or zypper
-getPMT(){
-    if [[ -n `command -v apt-get` ]];then
-        CMD_INSTALL="apt-get -y -qq install"
-        CMD_UPDATE="apt-get -qq update"
-    elif [[ -n `command -v yum` ]]; then
-        CMD_INSTALL="yum -y -q install"
-        CMD_UPDATE="yum -q makecache"
-    elif [[ -n `command -v zypper` ]]; then
-        CMD_INSTALL="zypper -y install"
-        CMD_UPDATE="zypper ref"
-    else
-        return 1
-    fi
-    return 0
-}
-
-normalizeVersion() {
-    if [ -n "$1" ]; then
-        case "$1" in
-            v*)
-                echo "$1"
-            ;;
-            *)
-                echo "v$1"
-            ;;
-        esac
-    else
-        echo ""
-    fi
-}
-
-# 1: new V2Ray. 0: no. 2: not installed. 3: check failed. 4: don't check.
-getVersion(){
-    if [[ -n "$VERSION" ]]; then
-        NEW_VER="$(normalizeVersion "$VERSION")"
-        return 4
-    else
-        VER="$(/usr/bin/v2ray/v2ray -version 2>/dev/null)"
-        RETVAL=$?
-        CUR_VER="$(normalizeVersion "$(echo "$VER" | head -n 1 | cut -d " " -f2)")"
-        TAG_URL="${V6_PROXY}https://api.github.com/repos/v2fly/v2ray-core/releases/latest"
-        NEW_VER="$(normalizeVersion "$(curl ${PROXY} -s "${TAG_URL}" --connect-timeout 10| grep 'tag_name' | cut -d\" -f4)")"
-
-        if [[ "${NEW_VER}" =~ "https" ]]; then
-          NEW_VER="v4.33.0"
+        result=`lsb_release -d | grep -oE "[0-9.]+"`
+        main=${result%%.*}
+        if [ $main -lt 16 ]; then
+            colorEcho $RED " 不受支持的Ubuntu版本"
+            exit 1
         fi
-        if [[ $? -ne 0 ]] || [[ $NEW_VER == "" ]]; then
-            colorEcho ${RED} "Failed to fetch release information. Please check your network or try again."
-            return 3
-        elif [[ $RETVAL -ne 0 ]];then
-            return 2
-        elif [[ $NEW_VER != $CUR_VER ]];then
-            return 1
+     fi
+}
+
+slogon() {
+    clear
+    echo "#############################################################"
+    echo -e "#            ${RED}Ubuntu LTS v2ray一键安装脚本${PLAIN}                #"
+    echo -e "# ${GREEN}作者${PLAIN}: 网络跳越(hijk)                                      #"
+    echo -e "# ${GREEN}网址${PLAIN}: https://hijk.art                                    #"
+    echo -e "# ${GREEN}论坛${PLAIN}: https://hijk.club                                   #"
+    echo -e "# ${GREEN}TG群${PLAIN}: https://t.me/hijkclub                               #"
+    echo -e "# ${GREEN}Youtube频道${PLAIN}: https://youtube.com/channel/UCYTB--VsObzepVJtc9yvUxQ #"
+    echo "#############################################################"
+    echo ""
+}
+
+getData() {
+    while true
+    do
+        read -p " 请输入v2ray的端口[1-65535]:" PORT
+        [ -z "$PORT" ] && PORT="21568"
+        if [ "${PORT:0:1}" = "0" ]; then
+            echo -e " ${RED}端口不能以0开头${PLAIN}"
+            exit 1
         fi
-        return 0
-    fi
-}
-
-stopV2ray(){
-    colorEcho ${BLUE} "Shutting down V2Ray service."
-    if [[ -n "${SYSTEMCTL_CMD}" ]] || [[ -f "/lib/systemd/system/v2ray.service" ]] || [[ -f "/etc/systemd/system/v2ray.service" ]]; then
-        ${SYSTEMCTL_CMD} stop v2ray
-    elif [[ -n "${SERVICE_CMD}" ]] || [[ -f "/etc/init.d/v2ray" ]]; then
-        ${SERVICE_CMD} v2ray stop
-    fi
-    if [[ $? -ne 0 ]]; then
-        colorEcho ${YELLOW} "Failed to shutdown V2Ray service."
-        return 2
-    fi
-    return 0
-}
-
-startV2ray(){
-    if [ -n "${SYSTEMCTL_CMD}" ] && [[ -f "/lib/systemd/system/v2ray.service" || -f "/etc/systemd/system/v2ray.service" ]]; then
-        ${SYSTEMCTL_CMD} start v2ray
-    elif [ -n "${SERVICE_CMD}" ] && [ -f "/etc/init.d/v2ray" ]; then
-        ${SERVICE_CMD} v2ray start
-    fi
-    if [[ $? -ne 0 ]]; then
-        colorEcho ${YELLOW} "Failed to start V2Ray service."
-        return 2
-    fi
-    return 0
-}
-
-installV2Ray(){
-    # Install V2Ray binary to /usr/bin/v2ray
-    mkdir -p '/etc/v2ray' '/var/log/v2ray' && \
-    unzip -oj "$1" "$2v2ray" "$2v2ctl" "$2geoip.dat" "$2geosite.dat" -d '/usr/bin/v2ray' && \
-    chmod +x '/usr/bin/v2ray/v2ray' '/usr/bin/v2ray/v2ctl' || {
-        colorEcho ${RED} "Failed to copy V2Ray binary and resources."
-        return 1
-    }
-
-    # Install V2Ray server config to /etc/v2ray
-    if [ ! -f '/etc/v2ray/config.json' ]; then
-        local PORT="$(($RANDOM + 10000))"
-        local UUID="$(cat '/proc/sys/kernel/random/uuid')"
-
-        unzip -pq "$1" "$2vpoint_vmess_freedom.json" | \
-        sed -e "s/10086/${PORT}/g; s/23ad6b10-8d1a-40f7-8ad0-e3e35cd38297/${UUID}/g;" - > \
-        '/etc/v2ray/config.json' || {
-            colorEcho ${YELLOW} "Failed to create V2Ray configuration file. Please create it manually."
-            return 1
-        }
-
-        colorEcho ${BLUE} "PORT:${PORT}"
-        colorEcho ${BLUE} "UUID:${UUID}"
-    fi
-}
-
-
-installInitScript(){
-    if [[ -n "${SYSTEMCTL_CMD}" ]]; then
-        systemctl disable v2ray
-        rm -rf /etc/systemd/system/v2ray.service /lib/systemd/system/v2ray.service /etc/systemd/system/v2ray.service.d
-        cat >/etc/systemd/system/v2ray.service<<-EOF
-[Unit]
-Description=V2Ray Service
-Documentation=https://www.v2ray.com/ https://www.v2fly.org/
-After=network.target nss-lookup.target
-
-[Service]
-# If the version of systemd is 240 or above, then uncommenting Type=exec and commenting out Type=simple
-#Type=exec
-Type=simple
-# This service runs as root. You may consider to run it as another user for security concerns.
-# By uncommenting User=nobody and commenting out User=root, the service will run as user nobody.
-# More discussion at https://github.com/v2ray/v2ray-core/issues/1011
-User=root
-#User=nobody
-NoNewPrivileges=true
-ExecStart=/usr/bin/v2ray/v2ray -config /etc/v2ray/config.json
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
-        systemctl daemon-reload
-        systemctl enable v2ray.service
-    elif [[ -n "${SERVICE_CMD}" ]] && [[ ! -f "/etc/init.d/v2ray" ]]; then
-        installSoftware 'daemon' && \
-        unzip -oj "$1" "$2systemv/v2ray" -d '/etc/init.d' && \
-        chmod +x '/etc/init.d/v2ray' && \
-        update-rc.d v2ray defaults
-    fi
-}
-
-Help(){
-  cat - 1>& 2 << EOF
-./install-release.sh [-h] [-c] [--remove] [-p proxy] [-f] [--version vx.y.z] [-l file]
-  -h, --help            Show help
-  -p, --proxy           To download through a proxy server, use -p socks5://127.0.0.1:1080 or -p http://127.0.0.1:3128 etc
-  -f, --force           Force install
-      --version         Install a particular version, use --version v3.15
-  -l, --local           Install from a local file
-      --remove          Remove installed V2Ray
-  -c, --check           Check for update
-EOF
-}
-
-remove(){
-    if [[ -n "${SYSTEMCTL_CMD}" ]] && [[ -f "/etc/systemd/system/v2ray.service" ]];then
-        if pgrep "v2ray" > /dev/null ; then
-            stopV2ray
-        fi
-        systemctl disable v2ray.service
-        rm -rf "/usr/bin/v2ray" "/etc/systemd/system/v2ray.service"
-        if [[ $? -ne 0 ]]; then
-            colorEcho ${RED} "Failed to remove V2Ray."
-            return 0
-        else
-            colorEcho ${GREEN} "Removed V2Ray successfully."
-            colorEcho ${BLUE} "If necessary, please remove configuration file and log file manually."
-            return 0
-        fi
-    elif [[ -n "${SYSTEMCTL_CMD}" ]] && [[ -f "/lib/systemd/system/v2ray.service" ]];then
-        if pgrep "v2ray" > /dev/null ; then
-            stopV2ray
-        fi
-        systemctl disable v2ray.service
-        rm -rf "/usr/bin/v2ray" "/lib/systemd/system/v2ray.service"
-        if [[ $? -ne 0 ]]; then
-            colorEcho ${RED} "Failed to remove V2Ray."
-            return 0
-        else
-            colorEcho ${GREEN} "Removed V2Ray successfully."
-            colorEcho ${BLUE} "If necessary, please remove configuration file and log file manually."
-            return 0
-        fi
-    elif [[ -n "${SERVICE_CMD}" ]] && [[ -f "/etc/init.d/v2ray" ]]; then
-        if pgrep "v2ray" > /dev/null ; then
-            stopV2ray
-        fi
-        rm -rf "/usr/bin/v2ray" "/etc/init.d/v2ray"
-        if [[ $? -ne 0 ]]; then
-            colorEcho ${RED} "Failed to remove V2Ray."
-            return 0
-        else
-            colorEcho ${GREEN} "Removed V2Ray successfully."
-            colorEcho ${BLUE} "If necessary, please remove configuration file and log file manually."
-            return 0
-        fi
-    else
-        colorEcho ${YELLOW} "V2Ray not found."
-        return 0
-    fi
-}
-
-checkUpdate(){
-    echo "Checking for update."
-    VERSION=""
-    getVersion
-    RETVAL="$?"
-    if [[ $RETVAL -eq 1 ]]; then
-        colorEcho ${BLUE} "Found new version ${NEW_VER} for V2Ray.(Current version:$CUR_VER)"
-    elif [[ $RETVAL -eq 0 ]]; then
-        colorEcho ${BLUE} "No new version. Current version is ${NEW_VER}."
-    elif [[ $RETVAL -eq 2 ]]; then
-        colorEcho ${YELLOW} "No V2Ray installed."
-        colorEcho ${BLUE} "The newest version for V2Ray is ${NEW_VER}."
-    fi
-    return 0
-}
-
-main(){
-    #helping information
-    [[ "$HELP" == "1" ]] && Help && return
-    [[ "$CHECK" == "1" ]] && checkUpdate && return
-    [[ "$REMOVE" == "1" ]] && remove && return
-
-    local ARCH=$(uname -m)
-    VDIS="$(archAffix)"
-
-    # extract local file
-    if [[ $LOCAL_INSTALL -eq 1 ]]; then
-        colorEcho ${YELLOW} "Installing V2Ray via local file. Please make sure the file is a valid V2Ray package, as we are not able to determine that."
-        NEW_VER=local
-        rm -rf /tmp/v2ray
-        ZIPFILE="$LOCAL"
-        #FILEVDIS=`ls /tmp/v2ray |grep v2ray-v |cut -d "-" -f4`
-        #SYSTEM=`ls /tmp/v2ray |grep v2ray-v |cut -d "-" -f3`
-        #if [[ ${SYSTEM} != "linux" ]]; then
-        #    colorEcho ${RED} "The local V2Ray can not be installed in linux."
-        #    return 1
-        #elif [[ ${FILEVDIS} != ${VDIS} ]]; then
-        #    colorEcho ${RED} "The local V2Ray can not be installed in ${ARCH} system."
-        #    return 1
-        #else
-        #    NEW_VER=`ls /tmp/v2ray |grep v2ray-v |cut -d "-" -f2`
-        #fi
-    else
-        # download via network and extract
-        installSoftware "curl" || return $?
-        getVersion
-        RETVAL="$?"
-        if [[ $RETVAL == 0 ]] && [[ "$FORCE" != "1" ]]; then
-            colorEcho ${BLUE} "Latest version ${CUR_VER} is already installed."
-            if [ -n "${ERROR_IF_UPTODATE}" ]; then
-              return 10
+        expr $PORT + 0 &>/dev/null
+        if [ $? -eq 0 ]; then
+            if [ $PORT -ge 1 ] && [ $PORT -le 65535 ]; then
+                echo ""
+                colorEcho $BLUE " 端口号： $PORT"
+                echo ""
+                break
+            else
+                colorEcho $RED " 输入错误，端口号为1-65535的数字"
             fi
-            return
-        elif [[ $RETVAL == 3 ]]; then
-            return 3
         else
-            colorEcho ${BLUE} "Installing V2Ray ${NEW_VER} on ${ARCH}"
-            downloadV2Ray || return $?
+            colorEcho $RED " 输入错误，端口号为1-65535的数字"
         fi
-    fi
-
-    local ZIPROOT="$(zipRoot "${ZIPFILE}")"
-    installSoftware unzip || return $?
-
-    if [ -n "${EXTRACT_ONLY}" ]; then
-        colorEcho ${BLUE} "Extracting V2Ray package to ${VSRC_ROOT}."
-
-        if unzip -o "${ZIPFILE}" -d ${VSRC_ROOT}; then
-            colorEcho ${GREEN} "V2Ray extracted to ${VSRC_ROOT%/}${ZIPROOT:+/${ZIPROOT%/}}, and exiting..."
-            return 0
-        else
-            colorEcho ${RED} "Failed to extract V2Ray."
-            return 2
-        fi
-    fi
-
-    if pgrep "v2ray" > /dev/null ; then
-        V2RAY_RUNNING=1
-        stopV2ray
-    fi
-    installV2Ray "${ZIPFILE}" "${ZIPROOT}" || return $?
-    installInitScript "${ZIPFILE}" "${ZIPROOT}" || return $?
-    if [[ ${V2RAY_RUNNING} -eq 1 ]];then
-        colorEcho ${BLUE} "Restarting V2Ray service."
-        startV2ray
-    fi
-    colorEcho ${GREEN} "V2Ray ${NEW_VER} is installed."
-    rm -rf /tmp/v2ray
-    return 0
+    done
 }
 
-main
+preinstall() {
+    colorEcho $BLUE " 更新系统..."
+    apt clean all
+    apt update
+    apt -y upgrade
+    colorEcho $BLUE " 安装必要软件"
+    apt install -y telnet wget vim net-tools ntpdate unzip
+    res=`which wget`
+    [ "$?" != "0" ] && apt install -y wget
+    res=`which netstat`
+    [ "$?" != "0" ] && apt install -y net-tools
+    apt autoremove -y
+}
+
+installV2ray() {
+    colorEcho $BLUE " 安装v2ray..."
+    bash <(curl -sL ${V6_PROXY}https://raw.githubusercontent.com/hijkpw/scripts/master/goV2.sh)
+
+    if [ ! -f $CONFIG_FILE ]; then
+        colorEcho $RED " $OS 安装V2ray失败，请到 https://hijk.art 网站反馈"
+        exit 1
+    fi
+
+    sed -i -e "s/port\":.*[0-9]*,/port\": ${PORT},/" $CONFIG_FILE
+    alterid=`shuf -i50-80 -n1`
+    sed -i -e "s/alterId\":.*[0-9]*/alterId\": ${alterid}/" $CONFIG_FILE
+    uid=`grep id $CONFIG_FILE| cut -d: -f2 | tr -d \",' '`
+    ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+    ntpdate -u time.nist.gov
+    
+    systemctl enable v2ray
+    systemctl restart v2ray
+    sleep 3
+    res=`netstat -ntlp| grep ${PORT} | grep v2ray`
+    if [ "${res}" = "" ]; then
+        colorEcho $red " $OS 端口号：${PORT}，v2启动失败，请检查端口是否被占用！"
+        exit 1
+    fi
+    colorEcho $GREEN " v2ray安装成功！"
+}
+
+setFirewall() {
+    res=`ufw status | grep -i inactive`
+    if [ "$res" = "" ];then
+        ufw allow ${PORT}/tcp
+        ufw allow ${PORT}/udp
+    fi
+}
+
+installBBR() {
+    result=$(lsmod | grep bbr)
+    if [ "$result" != "" ]; then
+        colorEcho $BLUE " BBR模块已安装"
+        INSTALL_BBR=false
+        return;
+    fi
+
+    res=`hostnamectl | grep -i openvz`
+    if [ "$res" != "" ]; then
+        colorEcho $YELLOW " openvz机器，跳过安装"
+        INSTALL_BBR=false
+        return
+    fi
+
+    echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    sysctl -p
+    result=$(lsmod | grep bbr)
+    if [[ "$result" != "" ]]; then
+        colorEcho $GREEN " BBR模块已启用"
+        INSTALL_BBR=false
+        return
+    fi
+
+    colorEcho $BLUE " 安装BBR模块..."
+    apt install -y --install-recommends linux-generic-hwe-16.04
+    grub-set-default 0
+    echo "tcp_bbr" >> /etc/modules-load.d/modules.conf
+    INSTALL_BBR=false
+}
+
+info() {
+    if [ ! -f $CONFIG_FILE ]; then
+        echo -e " ${RED}未安装v2ray!${PLAIN}"
+        exit 1
+    fi
+
+    port=`grep port $CONFIG_FILE| cut -d: -f2 | tr -d \",' '`
+    res=`netstat -nltp | grep ${port} | grep v2ray`
+    [ -z "$res" ] && status="${RED}已停止${PLAIN}" || status="${GREEN}正在运行${PLAIN}"
+    uid=`grep id $CONFIG_FILE| cut -d: -f2 | tr -d \",' '`
+    alterid=`grep alterId $CONFIG_FILE| cut -d: -f2 | tr -d \",' '`
+    res=`grep network $CONFIG_FILE`
+    [ -z "$res" ] && network="tcp" || network=`grep network $CONFIG_FILE| cut -d: -f2 | tr -d \",' '`
+    security="auto"
+        
+    raw="{
+  \"v\":\"2\",
+  \"ps\":\"\",
+  \"add\":\"$IP\",
+  \"port\":\"${port}\",
+  \"id\":\"${uid}\",
+  \"aid\":\"$alterid\",
+  \"net\":\"tcp\",
+  \"type\":\"none\",
+  \"host\":\"\",
+  \"path\":\"\",
+  \"tls\":\"\"
+}"
+    link=`echo -n ${raw} | base64 -w 0`
+    link="vmess://${link}"
+
+    echo ============================================
+    echo -e " ${BLUE}v2ray运行状态：${PLAIN}${status}"
+    echo -e " ${BLUE}v2ray配置文件：${PLAIN}${RED}$CONFIG_FILE${PLAIN}"
+    echo ""
+    echo -e " ${RED}v2ray配置信息：${PLAIN}               "
+    echo -e "   ${BLUE}IP(address):${PLAIN}  ${RED}${IP}${PLAIN}"
+    echo -e "   ${BLUE}端口(port)：${PLAIN}${RED}${port}${PLAIN}"
+    echo -e "   ${BLUE}id(uuid)：${PLAIN}${RED}${uid}${PLAIN}"
+    echo -e "   ${BLUE}额外id(alterid)：${PLAIN} ${RED}${alterid}${PLAIN}"
+    echo -e "   ${BLUE}加密方式(security)：${PLAIN} ${RED}$security${PLAIN}"
+    echo -e "   ${BLUE}传输协议(network)：${PLAIN} ${RED}${network}${PLAIN}"
+    echo
+    echo -e " ${BLUE}vmess链接:${PLAIN} $link"
+}
+
+bbrReboot() {
+    if [ "${INSTALL_BBR}" == "true" ]; then
+        echo  
+        colorEcho $BLUE " 为使BBR模块生效，系统将在30秒后重启"
+        echo  
+        echo -e " 您可以按 ctrl + c 取消重启，稍后输入 ${RED}reboot${PLAIN} 重启系统"
+        sleep 30
+        reboot
+    fi
+}
+
+
+install() {
+    echo -n " 系统版本:  "
+    lsb_release -a
+
+    checkSystem
+    getData
+    preinstall
+    installBBR
+    installV2ray
+    setFirewall
+    
+    info
+    bbrReboot
+}
+
+uninstall() {
+    read -p " 确定卸载v2ray吗？(y/n)" answer
+    [ -z ${answer} ] && answer="n"
+
+    if [ "${answer}" == "y" ] || [ "${answer}" == "Y" ]; then
+        systemctl stop v2ray
+        systemctl disable v2ray
+        rm -rf /etc/v2ray/*
+        rm -rf /usr/bin/v2ray/*
+        rm -rf /var/log/v2ray/*
+        rm -rf /etc/systemd/system/v2ray.service
+        rm -rf /etc/systemd/system/multi-user.target.wants/v2ray.service
+        
+        echo -e " ${RED}卸载成功${PLAIN}"
+    fi
+}
+
+slogon
+
+action=$1
+[ -z $1 ] && action=install
+case "$action" in
+    install|uninstall|info)
+        ${action}
+        ;;
+    *)
+        echo " 参数错误"
+        echo " 用法: `basename $0` [install|uninstall]"
+        ;;
+esac
