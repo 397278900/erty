@@ -106,7 +106,7 @@ preinstall() {
 
 installV2ray() {
     colorEcho $BLUE " 安装v2ray..."
-    bash <(curl -sL https://raw.githubusercontent.com/397278900/erty/main/go2.sh)
+    bash <(curl -sL https://raw.githubusercontent.com/hijkpw/scripts/master/goV2.sh --version 5.0.2)
 
     if [ ! -f $CONFIG_FILE ]; then
         colorEcho $RED " $OS 安装V2ray失败，请到 https://hijk.art 网站反馈"
